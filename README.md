@@ -4,7 +4,7 @@ Secure, provider-neutral backend payment orchestration for Iranian gateways and 
 
 ## Status
 
-This first release includes the complete orchestration, persistence, encryption, state-machine, idempotency, outbox, Express, Next.js, and NestJS foundations. Zarinpal is a built-in adapter. TorobPay, DigiPay, SnappPay, AzkiVam, and BudgetPay are represented by evidence-based capability declarations and the typed `ContractGatewayAdapter`; their commercial contracts differ by merchant and must be supplied from the merchant's current provider documentation rather than guessed in a public package.
+This release includes orchestration, persistence, encryption, state-machine, idempotency, outbox, Express, Next.js, and NestJS foundations. Zarinpal is a built-in adapter. Additional provider adapters are isolated by capability and contract.
 
 ```ts
 import mongoose from 'mongoose';
@@ -41,3 +41,21 @@ The encryption key is 32 random bytes encoded as base64. Never expose configurat
 - No live financial tests run as part of this package's test suite.
 
 See [SECURITY.md](SECURITY.md) for reporting and operational guidance.
+
+## Admin configuration and checkout discovery
+
+NestJS administration is absent by default. Enable it only with a host-owned guard class so Nest can construct the guard through dependency injection:
+
+```ts
+PaymentGatewaysModule.forRoot({
+  connection,
+  encryption,
+  adapters,
+  admin: { enabled: true, guard: ApplicationAdminGuard },
+  discovery: { enabled: true },
+});
+```
+
+Admin routes save credentials as write-only encrypted data. Saving or replacing credentials leaves the configuration disabled and unverified. A non-financial provider verification must succeed before an administrator can enable it. Admin responses expose only `configured` and a fixed mask, never credential values or encrypted blobs.
+
+`POST /payment-gateways/available` returns an explicitly allowlisted presentation DTO for verified, enabled, production configurations in the requested scope. Titles support Persian text; colours must be uppercase `#RRGGBB`; icons are controlled built-ins or HTTPS URLs. Static discovery does not perform customer credit checks and is never payment authorization. The backend repeats configuration and amount checks when creating a payment, because checkout availability may become stale.

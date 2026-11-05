@@ -1,7 +1,7 @@
 import { PaymentError } from './errors.js';
 import type { PaymentState } from './types.js';
 const transitions: Record<PaymentState, readonly PaymentState[]> = {
-  created: ['provider_pending', 'failed', 'unknown'], provider_pending: ['customer_action_required', 'callback_received', 'paid', 'cancelled', 'expired', 'failed', 'unknown'],
+  created: ['provider_pending', 'customer_action_required', 'failed', 'unknown'], provider_pending: ['customer_action_required', 'callback_received', 'paid', 'cancelled', 'expired', 'failed', 'unknown'],
   customer_action_required: ['callback_received', 'paid', 'cancelled', 'expired', 'failed', 'unknown'], callback_received: ['verifying', 'cancelled', 'failed', 'unknown'],
   verifying: ['paid', 'failed', 'unknown', 'manual_review'], paid: ['partially_refunded', 'refunded', 'reversed', 'manual_review'],
   partially_refunded: ['partially_refunded', 'refunded', 'manual_review'], refunded: [], reversed: [], cancelled: [], expired: ['paid', 'manual_review'],
