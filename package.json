@@ -1,0 +1,95 @@
+{
+  "name": "iran-payments",
+  "version": "0.1.0",
+  "description": "Provider-neutral, secure payment orchestration for Iranian gateways and BNPL providers",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./providers": {
+      "types": "./dist/providers/index.d.ts",
+      "import": "./dist/providers/index.js",
+      "require": "./dist/providers/index.cjs"
+    },
+    "./express": {
+      "types": "./dist/express.d.ts",
+      "import": "./dist/express.js",
+      "require": "./dist/express.cjs"
+    },
+    "./nextjs": {
+      "types": "./dist/nextjs.d.ts",
+      "import": "./dist/nextjs.js",
+      "require": "./dist/nextjs.cjs"
+    },
+    "./nestjs": {
+      "types": "./dist/nestjs.d.ts",
+      "import": "./dist/nestjs.js",
+      "require": "./dist/nestjs.cjs"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "SECURITY.md"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "prepack": "npm run build && npm test"
+  },
+  "dependencies": {
+    "axios": "^1.12.2",
+    "mongoose": "^8.19.1",
+    "zod": "4.6.7"
+  },
+  "peerDependencies": {
+    "@nestjs/common": ">=10",
+    "express": ">=4",
+    "next": ">=14",
+    "reflect-metadata": ">=0.1"
+  },
+  "peerDependenciesMeta": {
+    "@nestjs/common": {
+      "optional": true
+    },
+    "express": {
+      "optional": true
+    },
+    "next": {
+      "optional": true
+    },
+    "reflect-metadata": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.38.0",
+    "@nestjs/common": "^11.1.6",
+    "@types/express": "^5.0.3",
+    "@types/node": "^24.8.1",
+    "eslint": "^9.38.0",
+    "express": "^5.1.0",
+    "next": "^15.5.6",
+    "prettier": "^3.6.2",
+    "reflect-metadata": "^0.2.2",
+    "tsup": "^8.5.0",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.46.1",
+    "vitest": "^3.2.4"
+  }
+}

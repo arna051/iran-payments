@@ -1,0 +1,4 @@
+import { z } from 'zod';
+import { gatewayIds } from './types.js';
+export const moneySchema = z.object({ value: z.number().int().safe().positive(), currency: z.enum(['IRR', 'IRT']) });
+export const startPaymentSchema = z.object({ gateway: z.enum(gatewayIds), configurationId: z.string().optional(), idempotencyKey: z.string().trim().min(1).max(200), amount: moneySchema, reference: z.object({ type: z.string().trim().min(1).max(100), id: z.string().trim().min(1).max(300) }), customer: z.object({ phone: z.string().max(32).optional(), email: z.email().optional(), nationalId: z.string().max(32).optional() }).optional(), callbackUrl: z.url().refine((url) => url.startsWith('https://') || /^http:\/\/(localhost|127\.0\.0\.1)(:|\/)/.test(url), 'callbackUrl must use HTTPS'), description: z.string().max(500).optional(), metadata: z.record(z.string(), z.unknown()).optional(), extensions: z.unknown().optional() });

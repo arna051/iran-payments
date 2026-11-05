@@ -1,0 +1,10 @@
+{
+  "compilerOptions": {
+    "target": "ES2022", "module": "NodeNext", "moduleResolution": "NodeNext",
+    "strict": true, "noUncheckedIndexedAccess": true, "exactOptionalPropertyTypes": false,
+    "declaration": true, "skipLibCheck": true, "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true, "outDir": "dist",
+    "experimentalDecorators": true, "emitDecoratorMetadata": true
+  },
+  "include": ["src", "test", "tsup.config.ts"]
+}
