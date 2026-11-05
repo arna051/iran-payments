@@ -1,11 +1,166 @@
 import { PaymentError } from '../errors.js';
-import type { CallbackInput, GatewayAdapter, GatewayCapabilities, GatewayId, PaymentAttemptRecord, ProviderContext, ProviderCreateResult, ProviderInquiryResult, ProviderOperationResult, ProviderVerifyResult, StartPaymentInput } from '../types.js';
-export interface ProviderContract<T = unknown> { create(input: StartPaymentInput<T>, context: ProviderContext): Promise<ProviderCreateResult>; correlateCallback(input: CallbackInput): Promise<{ providerReference: string }> | { providerReference: string }; verify?(attempt: PaymentAttemptRecord, input: CallbackInput | undefined, context: ProviderContext): Promise<ProviderVerifyResult>; inquiry?(attempt: PaymentAttemptRecord, context: ProviderContext): Promise<ProviderInquiryResult>; cancel?(attempt: PaymentAttemptRecord, idempotencyKey: string, context: ProviderContext): Promise<ProviderOperationResult>; reverse?(attempt: PaymentAttemptRecord, idempotencyKey: string, context: ProviderContext): Promise<ProviderOperationResult>; refund?(attempt: PaymentAttemptRecord, amount: import('../types.js').Money, idempotencyKey: string, context: ProviderContext): Promise<ProviderOperationResult> }
-export class ContractGatewayAdapter<T = unknown> implements GatewayAdapter<T> { constructor(readonly id: GatewayId, readonly capabilities: GatewayCapabilities, private readonly contract: ProviderContract<T>) {} create(input: StartPaymentInput<T>, context: ProviderContext) { return this.contract.create(input, context); } correlateCallback(input: CallbackInput) { return this.contract.correlateCallback(input); } verify(attempt: PaymentAttemptRecord, input: CallbackInput | undefined, context: ProviderContext) { if (!this.contract.verify) throw new PaymentError('UNSUPPORTED_OPERATION', `${this.id} verification is not configured`); return this.contract.verify(attempt, input, context); } inquiry(attempt: PaymentAttemptRecord, context: ProviderContext) { if (!this.contract.inquiry) throw new PaymentError('UNSUPPORTED_OPERATION', `${this.id} inquiry is not configured`); return this.contract.inquiry(attempt, context); } cancel(attempt: PaymentAttemptRecord, key: string, context: ProviderContext) { if (!this.contract.cancel) throw new PaymentError('UNSUPPORTED_OPERATION', `${this.id} cancellation is not configured`); return this.contract.cancel(attempt, key, context); } reverse(attempt: PaymentAttemptRecord, key: string, context: ProviderContext) { if (!this.contract.reverse) throw new PaymentError('UNSUPPORTED_OPERATION', `${this.id} reversal is not configured`); return this.contract.reverse(attempt, key, context); } refund(attempt: PaymentAttemptRecord, amount: import('../types.js').Money, key: string, context: ProviderContext) { if (!this.contract.refund) throw new PaymentError('UNSUPPORTED_OPERATION', `${this.id} refund is not configured`); return this.contract.refund(attempt, amount, key, context); } }
+import type {
+  CallbackInput,
+  GatewayAdapter,
+  GatewayCapabilities,
+  GatewayId,
+  PaymentAttemptRecord,
+  ProviderContext,
+  ProviderCreateResult,
+  ProviderInquiryResult,
+  ProviderOperationResult,
+  ProviderVerifyResult,
+  StartPaymentInput,
+} from '../types.js';
+export interface ProviderContract<T = unknown> {
+  create(input: StartPaymentInput<T>, context: ProviderContext): Promise<ProviderCreateResult>;
+  correlateCallback(
+    input: CallbackInput,
+  ): Promise<{ providerReference: string }> | { providerReference: string };
+  verify?(
+    attempt: PaymentAttemptRecord,
+    input: CallbackInput | undefined,
+    context: ProviderContext,
+  ): Promise<ProviderVerifyResult>;
+  inquiry?(attempt: PaymentAttemptRecord, context: ProviderContext): Promise<ProviderInquiryResult>;
+  cancel?(
+    attempt: PaymentAttemptRecord,
+    idempotencyKey: string,
+    context: ProviderContext,
+  ): Promise<ProviderOperationResult>;
+  reverse?(
+    attempt: PaymentAttemptRecord,
+    idempotencyKey: string,
+    context: ProviderContext,
+  ): Promise<ProviderOperationResult>;
+  refund?(
+    attempt: PaymentAttemptRecord,
+    amount: import('../types.js').Money,
+    idempotencyKey: string,
+    context: ProviderContext,
+  ): Promise<ProviderOperationResult>;
+}
+export class ContractGatewayAdapter<T = unknown> implements GatewayAdapter<T> {
+  constructor(
+    readonly id: GatewayId,
+    readonly capabilities: GatewayCapabilities,
+    private readonly contract: ProviderContract<T>,
+  ) {}
+  create(input: StartPaymentInput<T>, context: ProviderContext) {
+    return this.contract.create(input, context);
+  }
+  correlateCallback(input: CallbackInput) {
+    return this.contract.correlateCallback(input);
+  }
+  verify(
+    attempt: PaymentAttemptRecord,
+    input: CallbackInput | undefined,
+    context: ProviderContext,
+  ) {
+    if (!this.contract.verify)
+      throw new PaymentError('UNSUPPORTED_OPERATION', `${this.id} verification is not configured`);
+    return this.contract.verify(attempt, input, context);
+  }
+  inquiry(attempt: PaymentAttemptRecord, context: ProviderContext) {
+    if (!this.contract.inquiry)
+      throw new PaymentError('UNSUPPORTED_OPERATION', `${this.id} inquiry is not configured`);
+    return this.contract.inquiry(attempt, context);
+  }
+  cancel(attempt: PaymentAttemptRecord, key: string, context: ProviderContext) {
+    if (!this.contract.cancel)
+      throw new PaymentError('UNSUPPORTED_OPERATION', `${this.id} cancellation is not configured`);
+    return this.contract.cancel(attempt, key, context);
+  }
+  reverse(attempt: PaymentAttemptRecord, key: string, context: ProviderContext) {
+    if (!this.contract.reverse)
+      throw new PaymentError('UNSUPPORTED_OPERATION', `${this.id} reversal is not configured`);
+    return this.contract.reverse(attempt, key, context);
+  }
+  refund(
+    attempt: PaymentAttemptRecord,
+    amount: import('../types.js').Money,
+    key: string,
+    context: ProviderContext,
+  ) {
+    if (!this.contract.refund)
+      throw new PaymentError('UNSUPPORTED_OPERATION', `${this.id} refund is not configured`);
+    return this.contract.refund(attempt, amount, key, context);
+  }
+}
 export const providerCapabilities: Record<Exclude<GatewayId, 'zarinpal'>, GatewayCapabilities> = {
-  torobpay: { paymentModel: 'bnpl', createPayment: true, customerEligibility: true, installmentPlans: true, inquiry: false, verify: true, reverse: false, cancel: false, partialRefund: false, fullRefund: false, webhook: false, redirectCallback: true, reconciliation: false },
-  digipay: { paymentModel: 'hybrid', createPayment: true, customerEligibility: false, installmentPlans: true, inquiry: false, verify: true, reverse: false, cancel: false, partialRefund: false, fullRefund: false, webhook: false, redirectCallback: true, reconciliation: false },
-  snapppay: { paymentModel: 'bnpl', createPayment: true, customerEligibility: true, installmentPlans: true, inquiry: true, verify: true, reverse: false, cancel: true, partialRefund: false, fullRefund: false, webhook: false, redirectCallback: true, reconciliation: true },
-  azkivam: { paymentModel: 'installment', createPayment: true, customerEligibility: false, installmentPlans: true, inquiry: false, verify: true, reverse: false, cancel: false, partialRefund: false, fullRefund: false, webhook: false, redirectCallback: true, reconciliation: false },
-  budgetpay: { paymentModel: 'hybrid', createPayment: true, customerEligibility: false, installmentPlans: true, inquiry: false, verify: true, reverse: false, cancel: false, partialRefund: false, fullRefund: false, webhook: false, redirectCallback: true, reconciliation: false },
+  torobpay: {
+    paymentModel: 'bnpl',
+    createPayment: true,
+    customerEligibility: true,
+    installmentPlans: true,
+    inquiry: false,
+    verify: true,
+    reverse: false,
+    cancel: false,
+    partialRefund: false,
+    fullRefund: false,
+    webhook: false,
+    redirectCallback: true,
+    reconciliation: false,
+  },
+  digipay: {
+    paymentModel: 'hybrid',
+    createPayment: true,
+    customerEligibility: false,
+    installmentPlans: true,
+    inquiry: false,
+    verify: true,
+    reverse: false,
+    cancel: false,
+    partialRefund: false,
+    fullRefund: false,
+    webhook: false,
+    redirectCallback: true,
+    reconciliation: false,
+  },
+  snapppay: {
+    paymentModel: 'bnpl',
+    createPayment: true,
+    customerEligibility: true,
+    installmentPlans: true,
+    inquiry: true,
+    verify: true,
+    reverse: false,
+    cancel: true,
+    partialRefund: false,
+    fullRefund: false,
+    webhook: false,
+    redirectCallback: true,
+    reconciliation: true,
+  },
+  azkivam: {
+    paymentModel: 'installment',
+    createPayment: true,
+    customerEligibility: false,
+    installmentPlans: true,
+    inquiry: false,
+    verify: true,
+    reverse: false,
+    cancel: false,
+    partialRefund: false,
+    fullRefund: false,
+    webhook: false,
+    redirectCallback: true,
+    reconciliation: false,
+  },
+  budgetpay: {
+    paymentModel: 'hybrid',
+    createPayment: true,
+    customerEligibility: false,
+    installmentPlans: true,
+    inquiry: false,
+    verify: true,
+    reverse: false,
+    cancel: false,
+    partialRefund: false,
+    fullRefund: false,
+    webhook: false,
+    redirectCallback: true,
+    reconciliation: false,
+  },
 };

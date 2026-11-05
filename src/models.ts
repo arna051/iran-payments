@@ -80,6 +80,7 @@ const attemptSchema = new Schema(
     reconciledAt: Date,
     paidAmount: { type: Number, default: 0 },
     refundedAmount: { type: Number, default: 0 },
+    reservedRefundAmount: { type: Number, default: 0 },
   },
   { timestamps: true, optimisticConcurrency: true },
 );
@@ -104,7 +105,10 @@ const operationSchema = new Schema(
   },
   { timestamps: true },
 );
-operationSchema.index({ attemptId: 1, kind: 1, idempotencyKey: 1 }, { unique: true, sparse: true });
+operationSchema.index(
+  { attemptId: 1, kind: 1, idempotencyKey: 1 },
+  { unique: true, partialFilterExpression: { idempotencyKey: { $type: 'string' } } },
+);
 const webhookSchema = new Schema(
   {
     gateway: { type: String, enum: gatewayIds, required: true },

@@ -7,6 +7,8 @@ export const moneySchema = z.object({
 export const startPaymentSchema = z.object({
   gateway: z.enum(gatewayIds),
   configurationId: z.string().optional(),
+  scope: z.string().trim().min(1).max(200).optional(),
+  environment: z.enum(['sandbox', 'production']).optional(),
   idempotencyKey: z.string().trim().min(1).max(200),
   amount: moneySchema,
   reference: z.object({

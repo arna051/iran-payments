@@ -83,6 +83,8 @@ export interface AvailableGateway {
 export interface StartPaymentInput<TExtensions = unknown> {
   gateway: GatewayId;
   configurationId?: string;
+  scope?: string;
+  environment?: 'sandbox' | 'production';
   idempotencyKey: string;
   amount: Money;
   reference: PaymentReference;
@@ -186,6 +188,7 @@ export interface PaymentAttemptRecord {
   providerTransactionId?: string;
   paidAmount: number;
   refundedAmount: number;
+  reservedRefundAmount?: number;
   providerState?: string;
   providerData?: Record<string, unknown>;
   configurationId?: unknown;

@@ -4,25 +4,30 @@ Secure, provider-neutral backend payment orchestration for Iranian gateways and 
 
 ## Status
 
-This release includes orchestration, persistence, encryption, state-machine, idempotency, outbox, Express, Next.js, and NestJS foundations. Zarinpal is a built-in adapter. Additional provider adapters are isolated by capability and contract.
+This release includes built-in adapters for Zarinpal, TorobPay, DigiPay, SnappPay, AzkiVam, and BudgetPay alongside orchestration, persistence, encryption, state machines, idempotency, reconciliation, an outbox, and Express, Next.js, and NestJS integrations. Provider-specific optional inputs remain typed extensions instead of leaking into the common payment contract.
 
 ```ts
 import mongoose from 'mongoose';
-import { createPaymentGateways, ZarinpalAdapter } from 'iran-payments';
+import { createBuiltInAdapters, createPaymentGateways } from 'iran-payments';
 
 const payments = createPaymentGateways({
   connection: mongoose.connection,
   encryption: { current: { id: 'v1', key: process.env.PAYMENT_CONFIG_ENCRYPTION_KEY! } },
-  adapters: [new ZarinpalAdapter()],
+  adapters: createBuiltInAdapters(),
 });
 
 await payments.configure({
-  provider: 'zarinpal', label: 'Primary gateway', environment: 'production',
+  publicKey: 'zarinpal-primary',
+  provider: 'zarinpal',
+  label: 'Primary gateway',
+  environment: 'production',
   credentials: { merchantId: process.env.ZARINPAL_MERCHANT_ID, currency: 'IRR' },
+  presentation: { title: 'پرداخت آنلاین زرین‌پال', sortOrder: 10 },
 });
 
 const payment = await payments.create({
-  gateway: 'zarinpal', idempotencyKey: 'checkout-order-123-v1',
+  gateway: 'zarinpal',
+  idempotencyKey: 'checkout-order-123-v1',
   amount: { value: 15_000_000, currency: 'IRR' },
   reference: { type: 'order', id: 'order-123' },
   callbackUrl: 'https://example.com/payments/callback/zarinpal',
@@ -56,6 +61,6 @@ PaymentGatewaysModule.forRoot({
 });
 ```
 
-Admin routes save credentials as write-only encrypted data. Saving or replacing credentials leaves the configuration disabled and unverified. A non-financial provider verification must succeed before an administrator can enable it. Admin responses expose only `configured` and a fixed mask, never credential values or encrypted blobs.
+Admin routes save credentials as write-only encrypted data. Saving or replacing credentials leaves the configuration disabled and unverified. A non-financial provider verification must succeed before an administrator can enable it. Providers without a documented non-financial verification endpoint remain unverified unless the host supplies a custom adapter with a safe `verifyConfiguration` implementation; the package never creates a charge merely to test credentials. Admin responses expose only `configured` and a fixed mask, never credential values or encrypted blobs.
 
 `POST /payment-gateways/available` returns an explicitly allowlisted presentation DTO for verified, enabled, production configurations in the requested scope. Titles support Persian text; colours must be uppercase `#RRGGBB`; icons are controlled built-ins or HTTPS URLs. Static discovery does not perform customer credit checks and is never payment authorization. The backend repeats configuration and amount checks when creating a payment, because checkout availability may become stale.

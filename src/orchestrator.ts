@@ -213,43 +213,52 @@ export class PaymentGateways {
     const requestFingerprint = fingerprint({
       gateway: parsed.gateway,
       configurationId: parsed.configurationId,
+      scope: parsed.scope ?? 'default',
+      environment: parsed.environment ?? 'production',
       amount: parsed.amount,
       reference: parsed.reference,
       customer: parsed.customer,
       callbackUrl: parsed.callbackUrl,
       extensions: parsed.extensions,
     });
-    const existing = (await this.models.Attempt.findOne({
-      gateway: parsed.gateway,
-      idempotencyKey: parsed.idempotencyKey,
-    })
-      .lean()
-      .exec()) as any;
-    if (existing) {
-      if (existing.requestFingerprint !== requestFingerprint)
+    const config = await this.loadConfiguration(
+      parsed.gateway,
+      parsed.configurationId,
+      parsed.scope ?? 'default',
+      parsed.environment ?? 'production',
+    );
+    const claimed = (await this.models.Attempt.findOneAndUpdate(
+      { gateway: parsed.gateway, idempotencyKey: parsed.idempotencyKey },
+      {
+        $setOnInsert: {
+          gateway: parsed.gateway,
+          configurationId: config._id,
+          state: 'created',
+          idempotencyKey: parsed.idempotencyKey,
+          requestFingerprint,
+          reference: parsed.reference,
+          amount: parsed.amount,
+          callbackUrl: parsed.callbackUrl,
+          metadata: parsed.metadata,
+          paidAmount: 0,
+          refundedAmount: 0,
+          reservedRefundAmount: 0,
+        },
+      },
+      { upsert: true, new: true, includeResultMetadata: true, setDefaultsOnInsert: true },
+    ).exec()) as any;
+    const attempt = claimed.value;
+    const inserted = !claimed.lastErrorObject?.updatedExisting;
+    if (!attempt) throw new PaymentError('CONCURRENCY_CONFLICT', 'Failed to claim payment attempt');
+    if (!inserted) {
+      if (attempt.requestFingerprint !== requestFingerprint) {
         throw new PaymentError(
           'IDEMPOTENCY_CONFLICT',
           'Idempotency key was already used with a different request',
         );
-      return this.result(
-        existing as unknown as PaymentAttemptRecord & { redirectUrl?: string },
-        true,
-      );
+      }
+      return this.result(attempt.toObject(), true);
     }
-    const config = await this.loadConfiguration(parsed.gateway, parsed.configurationId);
-    const attempt = await this.models.Attempt.create({
-      gateway: parsed.gateway,
-      configurationId: config._id,
-      state: 'created',
-      idempotencyKey: parsed.idempotencyKey,
-      requestFingerprint,
-      reference: parsed.reference,
-      amount: parsed.amount,
-      callbackUrl: parsed.callbackUrl,
-      metadata: parsed.metadata,
-      paidAmount: 0,
-      refundedAmount: 0,
-    });
     const operation = await this.models.Operation.create({
       attemptId: attempt._id,
       kind: 'create',
@@ -308,25 +317,49 @@ export class PaymentGateways {
     if (!correlation.providerReference && !correlation.attemptId) {
       throw new PaymentError('CALLBACK_UNCORRELATED', 'Callback is missing correlation data');
     }
-    const attempt = await this.models.Attempt.findOne(
-      correlation.attemptId
-        ? { _id: correlation.attemptId, gateway: input.gateway }
-        : { gateway: input.gateway, providerReference: correlation.providerReference },
-    ).exec();
-    if (!attempt)
+    const lookup = correlation.attemptId
+      ? { _id: correlation.attemptId, gateway: input.gateway }
+      : { gateway: input.gateway, providerReference: correlation.providerReference };
+    const current = await this.models.Attempt.findOne(lookup).exec();
+    if (!current)
       throw new PaymentError(
         'CALLBACK_UNCORRELATED',
         'Callback could not be correlated to a payment',
       );
-    const config = await this.loadConfiguration(input.gateway, String(attempt.configurationId));
-    if (!['paid', 'refunded', 'partially_refunded'].includes(attempt.state)) {
-      assertTransition(attempt.state, 'callback_received');
-      attempt.state = 'callback_received';
-      attempt.callbackAt = new Date();
-      await attempt.save();
-      assertTransition('callback_received', 'verifying');
-      attempt.state = 'verifying';
-      await attempt.save();
+    if (['paid', 'refunded', 'partially_refunded'].includes(current.state)) {
+      return current.toObject() as PaymentAttemptRecord;
+    }
+    const attempt = await this.models.Attempt.findOneAndUpdate(
+      {
+        ...lookup,
+        state: {
+          $in: [
+            'provider_pending',
+            'customer_action_required',
+            'callback_received',
+            'unknown',
+            'expired',
+            'failed',
+          ],
+        },
+      },
+      { $set: { state: 'verifying', callbackAt: new Date() } },
+      { new: true },
+    ).exec();
+    if (!attempt) {
+      const concurrentlyClaimed = await this.models.Attempt.findOne(lookup).exec();
+      if (!concurrentlyClaimed)
+        throw new PaymentError('CALLBACK_UNCORRELATED', 'Payment disappeared during verification');
+      return concurrentlyClaimed.toObject() as PaymentAttemptRecord;
+    }
+    const config = await this.loadAttemptConfiguration(input.gateway, attempt.configurationId);
+    const operation = await this.models.Operation.create({
+      attemptId: attempt._id,
+      kind: 'verify',
+      status: 'pending',
+      requestEvidence: redact({ query: input.query, body: input.body, headers: input.headers }),
+    });
+    try {
       const result = await adapter.verify(
         attempt.toObject() as PaymentAttemptRecord,
         input,
@@ -350,76 +383,303 @@ export class PaymentGateways {
       attempt.verifiedAt = new Date();
       if (result.paid) attempt.paidAmount = attempt.amount.value;
       await attempt.save();
+      operation.status = 'succeeded';
+      operation.responseEvidence = redact(result.raw);
+      operation.providerCorrelationId = result.providerTransactionId;
+      await operation.save();
       if (result.paid) await this.enqueue(attempt, 'paid', attempt.amount);
+    } catch (cause) {
+      if (attempt.state !== 'manual_review') {
+        const definitiveInputFailure =
+          cause instanceof PaymentError &&
+          ['INVALID_INPUT', 'CALLBACK_UNCORRELATED'].includes(cause.code);
+        attempt.state = definitiveInputFailure ? 'failed' : 'unknown';
+        await attempt.save();
+      }
+      operation.status = this.isUnknown(cause) ? 'unknown' : 'failed';
+      operation.error = this.safeError(cause);
+      await operation.save();
+      throw this.providerError(cause);
     }
     return attempt.toObject() as PaymentAttemptRecord;
   }
   async refund(attemptId: string, amount: Money, idempotencyKey: string) {
-    const attempt = await this.models.Attempt.findById(attemptId).exec();
-    if (!attempt) throw new PaymentError('INVALID_INPUT', 'Payment not found');
-    const adapter = this.adapter(attempt.gateway);
+    const initialAttempt = await this.models.Attempt.findById(attemptId).exec();
+    if (!initialAttempt) throw new PaymentError('INVALID_INPUT', 'Payment not found');
+    const adapter = this.adapter(initialAttempt.gateway);
     if (
       !adapter.refund ||
       (!adapter.capabilities.fullRefund && !adapter.capabilities.partialRefund)
     )
       throw new PaymentError(
         'UNSUPPORTED_OPERATION',
-        `${attempt.gateway} does not support refunds`,
+        `${initialAttempt.gateway} does not support refunds`,
       );
     if (
       !Number.isSafeInteger(amount.value) ||
-      amount.currency !== attempt.amount.currency ||
-      amount.value <= 0 ||
-      attempt.refundedAmount + amount.value > attempt.paidAmount
+      amount.currency !== initialAttempt.amount.currency ||
+      amount.value <= 0
     )
       throw new PaymentError(
         'INVALID_INPUT',
         'Refund amount is invalid or exceeds the unrefunded paid amount',
       );
     const fp = fingerprint({ attemptId, amount });
+    const claimed = (await this.models.Operation.findOneAndUpdate(
+      { attemptId, kind: 'refund', idempotencyKey },
+      {
+        $setOnInsert: {
+          attemptId,
+          kind: 'refund',
+          idempotencyKey,
+          requestFingerprint: fp,
+          status: 'pending',
+        },
+      },
+      { upsert: true, new: true, includeResultMetadata: true },
+    ).exec()) as any;
+    const operation = claimed.value;
+    if (!operation) throw new PaymentError('CONCURRENCY_CONFLICT', 'Failed to claim refund');
+    if (claimed.lastErrorObject?.updatedExisting) {
+      if (operation.requestFingerprint !== fp)
+        throw new PaymentError('IDEMPOTENCY_CONFLICT', 'Refund idempotency key conflict');
+      if (operation.status === 'succeeded') return initialAttempt.toObject();
+      if (operation.status === 'pending' || operation.status === 'unknown') {
+        throw new PaymentError(
+          'UNKNOWN_OUTCOME',
+          'The prior refund outcome is not confirmed; reconcile before retrying',
+        );
+      }
+      throw new PaymentError('PROVIDER_ERROR', 'The prior refund attempt failed');
+    }
+    const reserved = await this.models.Attempt.findOneAndUpdate(
+      {
+        _id: attemptId,
+        state: { $in: ['paid', 'partially_refunded'] },
+        $expr: {
+          $lte: [
+            {
+              $add: ['$refundedAmount', { $ifNull: ['$reservedRefundAmount', 0] }, amount.value],
+            },
+            '$paidAmount',
+          ],
+        },
+      },
+      { $inc: { reservedRefundAmount: amount.value } },
+      { new: true },
+    ).exec();
+    if (!reserved) {
+      operation.status = 'failed';
+      operation.error = { code: 'INVALID_INPUT', message: 'Refund exceeds available paid amount' };
+      await operation.save();
+      throw new PaymentError('INVALID_INPUT', 'Refund amount exceeds the available paid amount');
+    }
+    const config = await this.loadAttemptConfiguration(reserved.gateway, reserved.configurationId);
+    try {
+      const result = await adapter.refund(
+        reserved.toObject(),
+        amount,
+        idempotencyKey,
+        this.context(config),
+      );
+      const attempt = await this.models.Attempt.findOneAndUpdate(
+        { _id: attemptId, reservedRefundAmount: { $gte: amount.value } },
+        {
+          $inc: { reservedRefundAmount: -amount.value, refundedAmount: amount.value },
+          $set: { providerState: result.providerState },
+        },
+        { new: true },
+      ).exec();
+      if (!attempt)
+        throw new PaymentError(
+          'CONCURRENCY_CONFLICT',
+          'Refund succeeded remotely but local accounting requires reconciliation',
+        );
+      attempt.state =
+        attempt.refundedAmount === attempt.paidAmount ? 'refunded' : 'partially_refunded';
+      await attempt.save();
+      operation.status = 'succeeded';
+      operation.responseEvidence = redact(result.raw);
+      operation.providerCorrelationId = result.providerOperationId;
+      await operation.save();
+      await this.enqueue(attempt, 'refunded', amount);
+      return attempt.toObject();
+    } catch (cause) {
+      const unknown =
+        this.isUnknown(cause) ||
+        (cause instanceof PaymentError && cause.code === 'CONCURRENCY_CONFLICT');
+      operation.status = unknown ? 'unknown' : 'failed';
+      operation.error = this.safeError(cause);
+      await operation.save();
+      if (!unknown) {
+        await this.models.Attempt.updateOne(
+          { _id: attemptId, reservedRefundAmount: { $gte: amount.value } },
+          { $inc: { reservedRefundAmount: -amount.value } },
+        ).exec();
+      }
+      throw this.providerError(cause);
+    }
+  }
+  async inquiry(attemptId: string) {
+    const attempt = await this.models.Attempt.findById(attemptId).exec();
+    if (!attempt) throw new PaymentError('INVALID_INPUT', 'Payment not found');
+    const adapter = this.adapter(attempt.gateway);
+    if (!adapter.inquiry || !adapter.capabilities.inquiry) {
+      throw new PaymentError(
+        'UNSUPPORTED_OPERATION',
+        `${attempt.gateway} does not support inquiry`,
+      );
+    }
+    const config = await this.loadAttemptConfiguration(attempt.gateway, attempt.configurationId);
+    const operation = await this.models.Operation.create({
+      attemptId: attempt._id,
+      kind: 'inquiry',
+      status: 'pending',
+    });
+    try {
+      const result = await adapter.inquiry(attempt.toObject(), this.context(config));
+      operation.status = 'succeeded';
+      operation.responseEvidence = redact(result.raw);
+      await operation.save();
+      return result;
+    } catch (cause) {
+      operation.status = 'failed';
+      operation.error = this.safeError(cause);
+      await operation.save();
+      throw this.providerError(cause);
+    }
+  }
+  async cancel(attemptId: string, idempotencyKey: string) {
+    const attempt = await this.models.Attempt.findById(attemptId).exec();
+    if (!attempt) throw new PaymentError('INVALID_INPUT', 'Payment not found');
+    const adapter = this.adapter(attempt.gateway);
+    if (!adapter.cancel || !adapter.capabilities.cancel) {
+      throw new PaymentError(
+        'UNSUPPORTED_OPERATION',
+        `${attempt.gateway} does not support cancellation`,
+      );
+    }
+    if (!['provider_pending', 'customer_action_required', 'unknown'].includes(attempt.state)) {
+      throw new PaymentError(
+        'INVALID_STATE_TRANSITION',
+        `Cannot cancel payment in ${attempt.state}`,
+      );
+    }
+    const fingerprintValue = fingerprint({ attemptId, kind: 'cancel' });
     const existing = (await this.models.Operation.findOne({
       attemptId,
-      kind: 'refund',
+      kind: 'cancel',
       idempotencyKey,
     })
       .lean()
       .exec()) as any;
     if (existing) {
-      if (existing.requestFingerprint !== fp)
-        throw new PaymentError('IDEMPOTENCY_CONFLICT', 'Refund idempotency key conflict');
+      if (existing.requestFingerprint !== fingerprintValue) {
+        throw new PaymentError('IDEMPOTENCY_CONFLICT', 'Cancellation idempotency key conflict');
+      }
       return attempt.toObject();
     }
-    const config = await this.loadConfiguration(attempt.gateway, String(attempt.configurationId));
-    await this.models.Operation.create({
+    const operation = await this.models.Operation.create({
       attemptId,
-      kind: 'refund',
+      kind: 'cancel',
       idempotencyKey,
-      requestFingerprint: fp,
+      requestFingerprint: fingerprintValue,
       status: 'pending',
     });
-    const result = await adapter.refund(
-      attempt.toObject(),
-      amount,
-      idempotencyKey,
-      this.context(config),
-    );
-    attempt.refundedAmount += amount.value;
-    attempt.state =
-      attempt.refundedAmount === attempt.paidAmount ? 'refunded' : 'partially_refunded';
-    attempt.providerState = result.providerState;
-    await attempt.save();
-    await this.models.Operation.updateOne(
-      { attemptId, kind: 'refund', idempotencyKey },
-      {
-        $set: {
+    const config = await this.loadAttemptConfiguration(attempt.gateway, attempt.configurationId);
+    try {
+      const result = await adapter.cancel(attempt.toObject(), idempotencyKey, this.context(config));
+      assertTransition(attempt.state, 'cancelled');
+      attempt.state = 'cancelled';
+      attempt.providerState = result.providerState;
+      await attempt.save();
+      operation.status = 'succeeded';
+      operation.providerCorrelationId = result.providerOperationId;
+      operation.responseEvidence = redact(result.raw);
+      await operation.save();
+      return attempt.toObject();
+    } catch (cause) {
+      operation.status = this.isUnknown(cause) ? 'unknown' : 'failed';
+      operation.error = this.safeError(cause);
+      await operation.save();
+      if (this.isUnknown(cause)) {
+        attempt.state = 'unknown';
+        await attempt.save();
+      }
+      throw this.providerError(cause);
+    }
+  }
+  async reconcile(options: { olderThan?: Date; limit?: number } = {}) {
+    const olderThan = options.olderThan ?? new Date(Date.now() - 5 * 60_000);
+    const limit = Math.min(Math.max(options.limit ?? 100, 1), 500);
+    const attempts = await this.models.Attempt.find({
+      state: { $in: ['provider_pending', 'customer_action_required', 'unknown', 'verifying'] },
+      updatedAt: { $lte: olderThan },
+    })
+      .sort({ updatedAt: 1, _id: 1 })
+      .limit(limit)
+      .exec();
+    const summary = { examined: attempts.length, paid: 0, failed: 0, unchanged: 0, errors: 0 };
+    for (const attempt of attempts) {
+      const adapter = this.adapters.get(attempt.gateway);
+      if (!adapter?.inquiry || !adapter.capabilities.reconciliation) {
+        summary.unchanged += 1;
+        continue;
+      }
+      try {
+        const config = await this.loadAttemptConfiguration(
+          attempt.gateway,
+          attempt.configurationId,
+        );
+        const result = await adapter.inquiry(attempt.toObject(), this.context(config));
+        attempt.reconciledAt = new Date();
+        attempt.providerState = result.providerState;
+        if (
+          result.amount &&
+          (result.amount.value !== attempt.amount.value ||
+            result.amount.currency !== attempt.amount.currency)
+        ) {
+          attempt.state = 'manual_review';
+          await attempt.save();
+          summary.errors += 1;
+          continue;
+        }
+        if (result.paid) {
+          attempt.state = 'paid';
+          attempt.paidAmount = attempt.amount.value;
+          attempt.verifiedAt = new Date();
+          attempt.providerTransactionId = result.providerTransactionId;
+          await attempt.save();
+          await this.enqueue(attempt, 'paid', attempt.amount);
+          summary.paid += 1;
+        } else if (
+          result.definitive &&
+          ['failed', 'cancelled', 'expired'].includes((result.providerState ?? '').toLowerCase())
+        ) {
+          attempt.state = (result.providerState ?? 'failed').toLowerCase();
+          await attempt.save();
+          summary.failed += 1;
+        } else {
+          await attempt.save();
+          summary.unchanged += 1;
+        }
+        await this.models.Operation.create({
+          attemptId: attempt._id,
+          kind: 'inquiry',
           status: 'succeeded',
           responseEvidence: redact(result.raw),
-          providerCorrelationId: result.providerOperationId,
-        },
-      },
-    ).exec();
-    await this.enqueue(attempt, 'refunded', amount);
-    return attempt.toObject();
+        });
+      } catch (cause) {
+        summary.errors += 1;
+        await this.models.Operation.create({
+          attemptId: attempt._id,
+          kind: 'inquiry',
+          status: 'failed',
+          error: this.safeError(cause),
+        });
+      }
+    }
+    return summary;
   }
   private adapter(id: GatewayId) {
     const adapter = this.adapters.get(id);
@@ -427,9 +687,16 @@ export class PaymentGateways {
       throw new PaymentError('UNSUPPORTED_OPERATION', `No adapter registered for ${id}`);
     return adapter;
   }
-  private async loadConfiguration(provider: GatewayId, id?: string) {
+  private async loadConfiguration(
+    provider: GatewayId,
+    id: string | undefined,
+    scope: string,
+    environment: 'sandbox' | 'production',
+  ) {
     const base = {
       provider,
+      scope,
+      environment,
       enabled: true,
       verifiedAt: { $ne: null },
       'health.status': { $ne: 'unhealthy' },
@@ -442,6 +709,18 @@ export class PaymentGateways {
         'CONFIGURATION_NOT_FOUND',
         `No verified, enabled and healthy ${provider} configuration found`,
       );
+    return config;
+  }
+  private async loadAttemptConfiguration(provider: GatewayId, id: unknown) {
+    const config = await this.models.Configuration.findOne({ _id: id, provider })
+      .select('+credentials')
+      .exec();
+    if (!config) {
+      throw new PaymentError(
+        'CONFIGURATION_NOT_FOUND',
+        `The ${provider} configuration used by this payment is unavailable`,
+      );
+    }
     return config;
   }
   private context(config: any): ProviderContext {
