@@ -1,4 +1,10 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  randomBytes,
+  timingSafeEqual,
+} from 'node:crypto';
 import { PaymentError } from './errors.js';
 export interface EncryptedValue {
   algorithm: 'aes-256-gcm';
@@ -77,6 +83,11 @@ export function redact(value: unknown, depth = 0): unknown {
 }
 export function fingerprint(value: unknown): string {
   return createHash('sha256').update(stableStringify(value)).digest('hex');
+}
+export function safeEqualSignatures(actual: string, expected: string): boolean {
+  const actualDigest = createHash('sha256').update(actual, 'utf8').digest();
+  const expectedDigest = createHash('sha256').update(expected, 'utf8').digest();
+  return timingSafeEqual(actualDigest, expectedDigest) && actual.length === expected.length;
 }
 function stableStringify(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;

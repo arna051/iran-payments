@@ -26,6 +26,7 @@ describe('Mongoose orchestration concurrency', () => {
     providerState: 'partially_refunded',
     providerOperationId: `refund-${amount.value}`,
   }));
+  const hostEvent = vi.fn(async () => undefined);
   const adapter: GatewayAdapter = {
     id: 'zarinpal',
     capabilities: {
@@ -66,6 +67,7 @@ describe('Mongoose orchestration concurrency', () => {
       connection,
       encryption: { current: { id: 'v1', key: Buffer.alloc(32, 9) } },
       adapters: [adapter],
+      events: { onEvent: hostEvent },
       modelPrefix: `Test${Date.now()}`,
     });
     const saved = await payments.configure({
@@ -75,6 +77,10 @@ describe('Mongoose orchestration concurrency', () => {
       environment: 'production',
       credentials: { merchantId: 'write-only' },
       presentation: { title: 'زرین‌پال', sortOrder: 10 },
+      publicLimits: {
+        min: { value: 1_000_000, currency: 'IRR' },
+        max: { value: 2_000_000, currency: 'IRR' },
+      },
     });
     expect(saved).toMatchObject({
       configured: true,
@@ -87,9 +93,49 @@ describe('Mongoose orchestration concurrency', () => {
     });
     await payments.verifyConfiguration(saved.id);
     await payments.setConfigurationEnabled(saved.id, true);
+    const serialized = JSON.stringify(
+      await payments.models.Configuration.findById(saved.id).select('+credentials').exec(),
+    );
+    expect(serialized).not.toContain('write-only');
+    expect(serialized).not.toContain('ciphertext');
+    await payments.updateConfiguration(saved.id, {
+      credentials: { merchantId: 'rotated-write-only' },
+    });
+    await expect(payments.getConfiguration(saved.id)).resolves.toMatchObject({
+      enabled: false,
+      verified: false,
+    });
+    await payments.verifyConfiguration(saved.id);
+    await payments.setConfigurationEnabled(saved.id, true);
     await expect(payments.listAvailable()).resolves.toEqual([
       expect.objectContaining({ key: 'zarinpal-primary', title: 'زرین‌پال' }),
     ]);
+    await expect(
+      payments.listAvailable({ amount: { value: 999_999, currency: 'IRR' } }),
+    ).resolves.toEqual([]);
+    await expect(
+      payments.listAvailable({ amount: { value: 1_000_000, currency: 'IRR' } }),
+    ).resolves.toHaveLength(1);
+    await expect(
+      payments.listAvailable({ amount: { value: 2_000_000, currency: 'IRR' } }),
+    ).resolves.toHaveLength(1);
+    await expect(
+      payments.listAvailable({ amount: { value: 2_000_001, currency: 'IRR' } }),
+    ).resolves.toEqual([]);
+    await expect(
+      payments.listAvailable({ scope: { tenantId: 'another-tenant' } }),
+    ).resolves.toEqual([]);
+    await expect(
+      payments.create({
+        gateway: 'zarinpal',
+        configurationId: saved.id,
+        idempotencyKey: 'below-limit',
+        amount: { value: 999_999, currency: 'IRR' },
+        reference: { type: 'order', id: 'below-limit' },
+        callbackUrl: 'https://merchant.test/callback',
+      }),
+    ).rejects.toMatchObject({ code: 'GATEWAY_UNAVAILABLE' });
+    expect(createProviderPayment).not.toHaveBeenCalled();
     const input = {
       gateway: 'zarinpal' as const,
       configurationId: saved.id,
@@ -110,6 +156,11 @@ describe('Mongoose orchestration concurrency', () => {
     const stored = await payments.models.Attempt.findById(attemptId).lean().exec();
     expect(stored).toMatchObject({ state: 'paid', paidAmount: 1_500_000 });
     expect(await payments.models.Outbox.countDocuments({ aggregateId: attemptId })).toBe(1);
+    await Promise.all([payments.dispatchOutbox(), payments.dispatchOutbox()]);
+    expect(hostEvent).toHaveBeenCalledTimes(1);
+    expect(
+      await payments.models.Outbox.countDocuments({ aggregateId: attemptId, publishedAt: null }),
+    ).toBe(0);
 
     const refunds = await Promise.allSettled([
       payments.refund(attemptId, { value: 800_000, currency: 'IRR' }, 'refund-a'),
@@ -124,5 +175,10 @@ describe('Mongoose orchestration concurrency', () => {
       refundedAmount: 800_000,
       reservedRefundAmount: 0,
     });
+    const successfulRefundKey = refunds[0]!.status === 'fulfilled' ? 'refund-a' : 'refund-b';
+    await expect(
+      payments.refund(attemptId, { value: 800_000, currency: 'IRR' }, successfulRefundKey),
+    ).resolves.toMatchObject({ state: 'partially_refunded', refundedAmount: 800_000 });
+    expect(refundProviderPayment).toHaveBeenCalledTimes(1);
   });
 });

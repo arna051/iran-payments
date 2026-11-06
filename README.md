@@ -34,7 +34,9 @@ const payment = await payments.create({
 });
 ```
 
-The encryption key is 32 random bytes encoded as base64. Never expose configuration or package server exports to a browser bundle. MongoDB transactions require a replica set; an external gateway call is never part of a database transaction. Consume outbox records with idempotent host handlers to mark orders paid exactly once.
+The encryption key is 32 random bytes encoded as base64. Never expose configuration or package server exports to a browser bundle. MongoDB transactions require a replica set; an external gateway call is never part of a database transaction. Run `dispatchOutbox()` continuously (or `PaymentReconciliationService.dispatchOutbox()` from NestJS) and make the host event handler idempotent: delivery is at least once after worker crashes.
+
+Express and Next.js exports include trusted create, redirect callback, and authenticated webhook handlers. NestJS callback routes are opt-in. Signature-verifying webhooks require preserving the exact raw request body; for Express use `preserveRawBody` as the JSON parser `verify` callback, and for NestJS enable its `rawBody` option.
 
 ## Financial safety
 

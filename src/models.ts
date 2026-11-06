@@ -42,6 +42,10 @@ const configurationSchema = new Schema(
     credentials: { type: encryptedSchema, required: true, select: false },
     credentialsConfigured: { type: Boolean, default: true },
     presentation: { type: presentationSchema, required: true },
+    publicLimits: {
+      type: new Schema({ min: moneySchema, max: moneySchema }, { _id: false }),
+      required: false,
+    },
     enabled: { type: Boolean, default: false },
     verifiedAt: Date,
     verificationVersion: Number,
@@ -57,6 +61,12 @@ const configurationSchema = new Schema(
 );
 configurationSchema.index({ publicKey: 1 }, { unique: true });
 configurationSchema.index({ provider: 1, scope: 1, environment: 1 });
+function removeConfigurationSecrets(_document: unknown, value: Record<string, unknown>) {
+  delete value.credentials;
+  return value;
+}
+configurationSchema.set('toJSON', { transform: removeConfigurationSecrets });
+configurationSchema.set('toObject', { transform: removeConfigurationSecrets });
 const attemptSchema = new Schema(
   {
     gateway: { type: String, enum: gatewayIds, required: true },
@@ -113,6 +123,7 @@ const webhookSchema = new Schema(
   {
     gateway: { type: String, enum: gatewayIds, required: true },
     eventKey: { type: String, required: true },
+    attemptId: { type: Schema.Types.ObjectId, ref: 'PaymentAttempt' },
     signatureValid: Boolean,
     status: { type: String, enum: ['received', 'processed', 'ignored', 'failed'], required: true },
     evidence: Schema.Types.Mixed,
@@ -129,6 +140,7 @@ const outboxSchema = new Schema(
     type: { type: String, required: true },
     payload: { type: Schema.Types.Mixed, required: true },
     publishedAt: Date,
+    lockedAt: Date,
     attempts: { type: Number, default: 0 },
     nextAttemptAt: Date,
   },

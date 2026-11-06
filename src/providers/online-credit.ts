@@ -9,6 +9,7 @@ import type {
   GatewayId,
   PaymentAttemptRecord,
   ProviderContext,
+  ProviderVerifyResult,
   StartPaymentInput,
 } from '../types.js';
 
@@ -149,7 +150,7 @@ abstract class OnlineCreditAdapter implements GatewayAdapter<OnlineCreditExtensi
     attempt: PaymentAttemptRecord,
     _input: CallbackInput | undefined,
     context: ProviderContext,
-  ) {
+  ): Promise<ProviderVerifyResult> {
     const config = this.configuration(context);
     const token = await this.accessToken(config);
     try {
@@ -310,6 +311,34 @@ export class SnappPayAdapter extends OnlineCreditAdapter {
     redirectCallback: true,
     reconciliation: true,
   } as const;
+  override async verify(
+    attempt: PaymentAttemptRecord,
+    input: CallbackInput | undefined,
+    context: ProviderContext,
+  ) {
+    const verified = await super.verify(attempt, input, context);
+    try {
+      const status = await this.inquiry(attempt, context);
+      if (!status.definitive || !status.paid) {
+        throw new PaymentError(
+          'UNKNOWN_OUTCOME',
+          'SnappPay settled but status/amount confirmation is not definitive',
+        );
+      }
+      return {
+        ...verified,
+        providerTransactionId: status.providerTransactionId ?? verified.providerTransactionId,
+        providerState: status.providerState ?? verified.providerState,
+        amount: status.amount ?? verified.amount,
+        raw: { verifyAndSettle: verified.raw, status: status.raw },
+      };
+    } catch (cause) {
+      throw this.mapMutationError(
+        cause,
+        'SnappPay verification succeeded but amount confirmation is unknown',
+      );
+    }
+  }
   async inquiry(attempt: PaymentAttemptRecord, context: ProviderContext) {
     const config = this.configuration(context);
     const token = await this.accessToken(config);

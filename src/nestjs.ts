@@ -11,6 +11,9 @@ import {
   Param,
   Patch,
   Post,
+  Query,
+  Req,
+  Headers,
   UseGuards,
   type CanActivate,
   type InjectionToken,
@@ -18,12 +21,19 @@ import {
   type Type,
 } from '@nestjs/common';
 import { createPaymentGateways, type PaymentGatewaysOptions } from './orchestrator.js';
-import type { AvailabilityInput, GatewayId, GatewayPresentation } from './types.js';
+import type {
+  AvailabilityInput,
+  GatewayId,
+  GatewayPresentation,
+  GatewayPublicLimits,
+} from './types.js';
+import type { Request } from 'express';
 export const PAYMENT_GATEWAYS = Symbol('PAYMENT_GATEWAYS');
 export const PAYMENT_GATEWAYS_OPTIONS = Symbol('PAYMENT_GATEWAYS_OPTIONS');
 export interface NestPaymentGatewaysOptions extends PaymentGatewaysOptions {
   admin?: { enabled: boolean; guard: Type<CanActivate>; routePrefix?: string };
   discovery?: { enabled: boolean; route?: string; guard?: Type<CanActivate> };
+  callbacks?: { enabled: boolean; routePrefix?: string };
 }
 @Injectable()
 export class PaymentGatewaysService {
@@ -32,6 +42,17 @@ export class PaymentGatewaysService {
   ) {}
   get client() {
     return this.payments;
+  }
+}
+
+@Injectable()
+export class PaymentReconciliationService {
+  constructor(@Inject(PaymentGatewaysService) private readonly payments: PaymentGatewaysService) {}
+  run(options?: { olderThan?: Date; limit?: number }) {
+    return this.payments.client.reconcile(options);
+  }
+  dispatchOutbox(options?: { limit?: number }) {
+    return this.payments.client.dispatchOutbox(options);
   }
 }
 function decorateMethod(decorator: MethodDecorator, target: object, name: string) {
@@ -59,6 +80,7 @@ function createAdminController(prefix: string, guard: Type<CanActivate>): Type<u
       scope?: string;
       credentials: Record<string, unknown>;
       presentation: GatewayPresentation;
+      publicLimits?: GatewayPublicLimits;
     }) {
       return this.service.client.configure(body);
     }
@@ -123,6 +145,49 @@ function createDiscoveryController(route: string, guard?: Type<CanActivate>): Ty
   Body()(PaymentGatewayDiscoveryController.prototype, 'available', 0);
   return PaymentGatewayDiscoveryController;
 }
+
+function createCallbackController(route: string): Type<unknown> {
+  class PaymentGatewayCallbackController {
+    constructor(readonly service: PaymentGatewaysService) {}
+    async callback(
+      gateway: GatewayId,
+      query: Record<string, unknown>,
+      body: unknown,
+      headers: Record<string, string | string[] | undefined>,
+    ) {
+      const attempt = await this.service.client.verifyCallback({ gateway, query, body, headers });
+      return { ok: true, state: attempt.state };
+    }
+    async webhook(
+      gateway: GatewayId,
+      configurationKey: string,
+      request: Request & { rawBody?: Buffer },
+    ) {
+      await this.service.client.processWebhook({
+        gateway,
+        configurationKey,
+        query: request.query,
+        body: request.body,
+        headers: request.headers as Record<string, string | string[] | undefined>,
+        ...(Buffer.isBuffer(request.rawBody) ? { rawBody: request.rawBody } : {}),
+      });
+      return { ok: true };
+    }
+  }
+  Controller(route)(PaymentGatewayCallbackController);
+  Inject(PaymentGatewaysService)(PaymentGatewayCallbackController, undefined, 0);
+  const proto = PaymentGatewayCallbackController.prototype;
+  decorateMethod(Post(':gateway'), proto, 'callback');
+  Param('gateway')(proto, 'callback', 0);
+  Query()(proto, 'callback', 1);
+  Body()(proto, 'callback', 2);
+  Headers()(proto, 'callback', 3);
+  decorateMethod(Post('webhook/:gateway/:configurationKey'), proto, 'webhook');
+  Param('gateway')(proto, 'webhook', 0);
+  Param('configurationKey')(proto, 'webhook', 1);
+  Req()(proto, 'webhook', 2);
+  return PaymentGatewayCallbackController;
+}
 @Global()
 @Module({})
 export class PaymentGatewaysModule {
@@ -135,7 +200,7 @@ export class PaymentGatewaysModule {
     useFactory: (
       ...args: any[]
     ) => NestPaymentGatewaysOptions | Promise<NestPaymentGatewaysOptions>;
-    staticOptions?: Pick<NestPaymentGatewaysOptions, 'admin' | 'discovery'>;
+    staticOptions?: Pick<NestPaymentGatewaysOptions, 'admin' | 'discovery' | 'callbacks'>;
   }): DynamicModule {
     const controllers: Type<unknown>[] = [];
     if (options.staticOptions?.admin?.enabled)
@@ -150,6 +215,12 @@ export class PaymentGatewaysModule {
         createDiscoveryController(
           options.staticOptions.discovery.route ?? 'payment-gateways/available',
           options.staticOptions.discovery.guard,
+        ),
+      );
+    if (options.staticOptions?.callbacks?.enabled)
+      controllers.push(
+        createCallbackController(
+          options.staticOptions.callbacks.routePrefix ?? 'payment-gateways/callback',
         ),
       );
     return {
@@ -168,8 +239,9 @@ export class PaymentGatewaysModule {
           inject: [PAYMENT_GATEWAYS_OPTIONS],
         },
         PaymentGatewaysService,
+        PaymentReconciliationService,
       ],
-      exports: [PAYMENT_GATEWAYS, PaymentGatewaysService],
+      exports: [PAYMENT_GATEWAYS, PaymentGatewaysService, PaymentReconciliationService],
     };
   }
 }

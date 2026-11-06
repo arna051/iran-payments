@@ -9,6 +9,7 @@ export const startPaymentSchema = z.object({
   configurationId: z.string().optional(),
   scope: z.string().trim().min(1).max(200).optional(),
   environment: z.enum(['sandbox', 'production']).optional(),
+  paymentModel: z.enum(['redirect', 'wallet', 'bnpl', 'installment', 'hybrid']).optional(),
   idempotencyKey: z.string().trim().min(1).max(200),
   amount: moneySchema,
   reference: z.object({
@@ -76,6 +77,16 @@ export const gatewayConfigurationInputSchema = z
     scope: z.string().trim().min(1).max(200).default('default'),
     credentials: z.record(z.string(), z.unknown()),
     presentation: gatewayPresentationSchema,
+    publicLimits: z
+      .object({ min: moneySchema.optional(), max: moneySchema.optional() })
+      .refine(
+        (limits) =>
+          !limits.min ||
+          !limits.max ||
+          (limits.min.currency === limits.max.currency && limits.min.value <= limits.max.value),
+        'Minimum and maximum must use one currency and min must not exceed max',
+      )
+      .optional(),
   })
   .strict();
 export const availabilitySchema = z
@@ -95,5 +106,6 @@ export const availabilitySchema = z
       })
       .optional(),
     paymentModel: z.enum(['redirect', 'wallet', 'bnpl', 'installment', 'hybrid']).optional(),
+    environment: z.enum(['sandbox', 'production']).optional(),
   })
   .strict();

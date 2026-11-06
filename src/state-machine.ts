@@ -10,6 +10,7 @@ const transitions: Record<PaymentState, readonly PaymentState[]> = {
     'expired',
     'failed',
     'unknown',
+    'verifying',
   ],
   customer_action_required: [
     'callback_received',
@@ -18,6 +19,7 @@ const transitions: Record<PaymentState, readonly PaymentState[]> = {
     'expired',
     'failed',
     'unknown',
+    'verifying',
   ],
   callback_received: ['verifying', 'cancelled', 'failed', 'unknown'],
   verifying: ['paid', 'failed', 'unknown', 'manual_review'],
@@ -26,8 +28,8 @@ const transitions: Record<PaymentState, readonly PaymentState[]> = {
   refunded: [],
   reversed: [],
   cancelled: [],
-  expired: ['paid', 'manual_review'],
-  failed: ['paid', 'manual_review'],
+  expired: ['verifying', 'paid', 'manual_review'],
+  failed: ['verifying', 'paid', 'manual_review'],
   unknown: [
     'provider_pending',
     'customer_action_required',
@@ -36,6 +38,7 @@ const transitions: Record<PaymentState, readonly PaymentState[]> = {
     'cancelled',
     'expired',
     'manual_review',
+    'verifying',
   ],
   manual_review: ['paid', 'failed', 'cancelled', 'refunded'],
 };

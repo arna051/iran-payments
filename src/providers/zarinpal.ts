@@ -91,7 +91,8 @@ export class ZarinpalAdapter implements GatewayAdapter<ZarinpalExtensions> {
     const authority = String(input.query?.Authority ?? input.query?.authority ?? '');
     if (!authority)
       throw new PaymentError('CALLBACK_UNCORRELATED', 'Zarinpal callback is missing Authority');
-    return { providerReference: authority };
+    const attemptId = String(input.query?.iranPaymentId ?? '').trim();
+    return { providerReference: authority, ...(attemptId ? { attemptId } : {}) };
   }
   async verify(
     attempt: PaymentAttemptRecord,

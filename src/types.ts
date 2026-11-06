@@ -63,11 +63,16 @@ export interface GatewayPresentation {
   color?: string;
   sortOrder: number;
 }
+export interface GatewayPublicLimits {
+  min?: Money;
+  max?: Money;
+}
 export interface AvailabilityInput {
   amount?: Money;
   customer?: Customer;
   scope?: { tenantId?: string; businessId?: string };
   paymentModel?: PaymentModel;
+  environment?: 'sandbox' | 'production';
 }
 export interface AvailableGateway {
   key: string;
@@ -79,12 +84,14 @@ export interface AvailableGateway {
   paymentModel: PaymentModel;
   capabilities: Pick<GatewayCapabilities, 'customerEligibility' | 'installmentPlans'>;
   sortOrder: number;
+  limits?: GatewayPublicLimits;
 }
 export interface StartPaymentInput<TExtensions = unknown> {
   gateway: GatewayId;
   configurationId?: string;
   scope?: string;
   environment?: 'sandbox' | 'production';
+  paymentModel?: PaymentModel;
   idempotencyKey: string;
   amount: Money;
   reference: PaymentReference;
@@ -135,6 +142,12 @@ export interface ProviderOperationResult {
   amount?: Money;
   raw?: unknown;
 }
+export interface ProviderWebhookVerification {
+  signatureValid: boolean;
+  eventId?: string;
+  attemptId?: string;
+  providerReference?: string;
+}
 export interface ProviderContext {
   signal?: AbortSignal;
   configuration: Record<string, unknown>;
@@ -147,6 +160,10 @@ export interface GatewayAdapter<TExtensions = unknown> {
     context: ProviderContext,
   ): Promise<ProviderCreateResult>;
   verifyConfiguration?(context: ProviderContext): Promise<{ healthy: boolean; details?: unknown }>;
+  verifyWebhook?(
+    input: CallbackInput,
+    context: ProviderContext,
+  ): Promise<ProviderWebhookVerification>;
   correlateCallback(
     input: CallbackInput,
   ):

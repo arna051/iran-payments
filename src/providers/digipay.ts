@@ -137,9 +137,12 @@ export class DigiPayAdapter implements GatewayAdapter<DigiPayExtensions> {
     const body =
       input?.body && typeof input.body === 'object' ? (input.body as Record<string, unknown>) : {};
     const trackingCode = String(body.trackingCode ?? query.trackingCode ?? '').trim();
-    const providerId = String(
-      body.providerId ?? query.providerId ?? attempt.providerData?.providerId ?? '',
-    ).trim();
+    const expectedProviderId = String(attempt.providerData?.providerId ?? '').trim();
+    const callbackProviderId = String(body.providerId ?? query.providerId ?? '').trim();
+    if (callbackProviderId && callbackProviderId !== expectedProviderId) {
+      throw new PaymentError('INVALID_INPUT', 'DigiPay callback providerId does not match');
+    }
+    const providerId = expectedProviderId;
     const type = body.type ?? query.type ?? attempt.providerData?.type ?? 11;
     if (!trackingCode || !providerId)
       throw new PaymentError(
@@ -158,6 +161,15 @@ export class DigiPayAdapter implements GatewayAdapter<DigiPayExtensions> {
       if (!parsed.success)
         throw new PaymentError('PROVIDER_RESPONSE_INVALID', 'DigiPay verify response is malformed');
       const status = parsed.data.result?.status ?? -1;
+      if (
+        parsed.data.providerId !== undefined &&
+        String(parsed.data.providerId) !== expectedProviderId
+      ) {
+        throw new PaymentError(
+          'PROVIDER_RESPONSE_INVALID',
+          'DigiPay verification identity mismatch',
+        );
+      }
       return {
         paid: status === 0,
         providerReference: attempt.providerReference,
