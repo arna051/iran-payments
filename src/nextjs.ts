@@ -1,4 +1,3 @@
-import 'server-only';
 import type { PaymentGateways } from './orchestrator.js';
 import type { GatewayId } from './types.js';
 import type { StartPaymentInput } from './types.js';

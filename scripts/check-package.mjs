@@ -17,17 +17,28 @@ try {
     .at(-1);
   const absoluteTarball = join(repository, tarball);
   execFileSync('npm', ['init', '-y'], { cwd: temporary, stdio: 'ignore' });
-  execFileSync('npm', ['install', '--ignore-scripts', '--no-audit', absoluteTarball], {
-    cwd: temporary,
-    stdio: 'ignore',
-  });
+  execFileSync(
+    'npm',
+    [
+      'install',
+      '--ignore-scripts',
+      '--no-audit',
+      absoluteTarball,
+      '@nestjs/common@^11',
+      'express@^5',
+      'next@^15',
+      'reflect-metadata@^0.2',
+      'rxjs@^7',
+    ],
+    { cwd: temporary, stdio: 'ignore' },
+  );
   writeFileSync(
     join(temporary, 'esm.mjs'),
-    "import { createPaymentGateways, createBuiltInAdapters } from 'iran-payments';\nif (typeof createPaymentGateways !== 'function' || createBuiltInAdapters().length !== 6) process.exit(1);\n",
+    "import { createPaymentGateways, createBuiltInAdapters } from 'iran-payments';\nimport * as providers from 'iran-payments/providers';\nimport * as express from 'iran-payments/express';\nimport * as nextjs from 'iran-payments/nextjs';\nimport * as nestjs from 'iran-payments/nestjs';\nif (typeof createPaymentGateways !== 'function' || createBuiltInAdapters().length !== 6 || typeof providers.ZarinpalAdapter !== 'function' || typeof express.paymentCallbackHandler !== 'function' || typeof nextjs.createNextCallbackHandler !== 'function' || typeof nestjs.PaymentGatewaysModule !== 'function') process.exit(1);\n",
   );
   writeFileSync(
     join(temporary, 'cjs.cjs'),
-    "const pkg = require('iran-payments');\nif (typeof pkg.createPaymentGateways !== 'function' || pkg.createBuiltInAdapters().length !== 6) process.exit(1);\n",
+    "const pkg = require('iran-payments');\nconst providers = require('iran-payments/providers');\nconst express = require('iran-payments/express');\nconst nextjs = require('iran-payments/nextjs');\nconst nestjs = require('iran-payments/nestjs');\nif (typeof pkg.createPaymentGateways !== 'function' || pkg.createBuiltInAdapters().length !== 6 || typeof providers.ZarinpalAdapter !== 'function' || typeof express.paymentCallbackHandler !== 'function' || typeof nextjs.createNextCallbackHandler !== 'function' || typeof nestjs.PaymentGatewaysModule !== 'function') process.exit(1);\n",
   );
   writeFileSync(
     join(temporary, 'types.ts'),
